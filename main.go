@@ -94,13 +94,27 @@ var (
 			Background(lipgloss.Color("#25A065")).
 			Padding(0, 1)
 
-	tabStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(0, 1)
+	accountItemStyle = lipgloss.NewStyle().
+				Padding(0, 1).
+				Margin(0, 1)
 
-	activeTabStyle = tabStyle.Copy().
-			BorderForeground(lipgloss.Color("39"))
+	activeAccountStyle = accountItemStyle.Copy().
+				Foreground(lipgloss.Color("#25A065")).
+				Bold(true).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("39")).
+				Padding(0, 1)
+
+	addAccountStyle = accountItemStyle.Copy().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
+
+	activeAddAccountStyle = addAccountStyle.Copy().
+				Foreground(lipgloss.Color("#25A065")).
+				Bold(true).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("39")).
+				Padding(0, 1)
 
 	inputStyle = lipgloss.NewStyle().Width(40).BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
@@ -116,17 +130,12 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF0000"))
 
-	repoInfoStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(1, 2).
-			Margin(1, 0)
 )
 
 // Клавиши навигации
 type keyMap struct {
-	NextTab key.Binding
-	PrevTab key.Binding
+	Up      key.Binding
+	Down    key.Binding
 	Quit    key.Binding
 	Submit  key.Binding
 	Refresh key.Binding
@@ -135,13 +144,13 @@ type keyMap struct {
 }
 
 var keys = keyMap{
-	NextTab: key.NewBinding(
-		key.WithKeys("ctrl+l", "right"),
-		key.WithHelp("→/ctrl+l", "next tab"),
+	Up: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "up"),
 	),
-	PrevTab: key.NewBinding(
-		key.WithKeys("ctrl+h", "left"),
-		key.WithHelp("←/ctrl+h", "prev tab"),
+	Down: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "down"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("ctrl+c", "q"),
@@ -149,7 +158,7 @@ var keys = keyMap{
 	),
 	Submit: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("enter", "submit"),
+		key.WithHelp("enter", "select"),
 	),
 	Refresh: key.NewBinding(
 		key.WithKeys("r"),
@@ -160,8 +169,8 @@ var keys = keyMap{
 		key.WithHelp("c", "clone repo"),
 	),
 	Back: key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("esc", "back"),
+		key.WithKeys("esc", "backspace"),
+		key.WithHelp("esc/backspace", "back"),
 	),
 }
 
@@ -181,8 +190,8 @@ const (
 // Основная модель приложения
 type model struct {
 	accounts        []Account
-	selectedTab     int
-	tabs            []string
+	selectedAccount int // Индекс выбранного аккаунта
+	accountsList    []string
 	list            list.Model
 	keys            keyMap
 	width           int
@@ -193,7 +202,7 @@ type model struct {
 	tokenInput      textinput.Model
 	configFile      string
 	repos           []Repository
-	selectedAccount *Account
+	selectedAccountPtr *Account
 	spinner         spinner.Model
 	loading         bool
 	message         string
@@ -389,12 +398,12 @@ func initialModel() model {
 		accounts = []Account{}
 	}
 
-	// Создаем вкладки
-	tabs := []string{}
+	// Создаем список аккаунтов
+	accountsList := []string{}
 	for _, acc := range accounts {
-		tabs = append(tabs, acc.Name)
+		accountsList = append(accountsList, acc.Name)
 	}
-	tabs = append(tabs, "+ Add Account")
+	accountsList = append(accountsList, "+ Add Account")
 
 	// Инициализация списка
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
@@ -417,16 +426,16 @@ func initialModel() model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return model{
-		accounts:    accounts,
-		selectedTab: 0,
-		tabs:        tabs,
-		list:        l,
-		keys:        keys,
-		configFile:  configFile,
-		nameInput:   nameInput,
-		tokenInput:  tokenInput,
-		state:       stateAccounts,
-		spinner:     s,
+		accounts:        accounts,
+		selectedAccount: 0,
+		accountsList:    accountsList,
+		list:            l,
+		keys:            keys,
+		configFile:      configFile,
+		nameInput:       nameInput,
+		tokenInput:      tokenInput,
+		state:           stateAccounts,
+		spinner:         s,
 	}
 }
 
@@ -445,6 +454,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(msg.Width-appStyle.GetHorizontalFrameSize(), msg.Height-10)
+		inputStyle = inputStyle.Width(min(40, msg.Width-20))
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -505,24 +515,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateAccountsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keys.NextTab):
-		m.selectedTab = min(m.selectedTab+1, len(m.tabs)-1)
-	case key.Matches(msg, m.keys.PrevTab):
-		m.selectedTab = max(m.selectedTab-1, 0)
+	case key.Matches(msg, m.keys.Up):
+		m.selectedAccount = max(m.selectedAccount-1, 0)
+	case key.Matches(msg, m.keys.Down):
+		m.selectedAccount = min(m.selectedAccount+1, len(m.accountsList)-1)
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Submit):
-		if m.selectedTab == len(m.tabs)-1 {
+		if m.selectedAccount == len(m.accountsList)-1 {
 			// Переход к добавлению аккаунта
 			m.state = stateAddingAccount
 			m.formState = nameInput
 			m.nameInput.Focus()
-		} else if m.selectedTab < len(m.accounts) {
+		} else if m.selectedAccount < len(m.accounts) {
 			// Загрузка репозиториев выбранного аккаунта
-			m.selectedAccount = &m.accounts[m.selectedTab]
+			m.selectedAccountPtr = &m.accounts[m.selectedAccount]
 			m.state = stateRepos
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, loadRepos(m.selectedAccount))
+			return m, tea.Batch(m.spinner.Tick, loadRepos(m.selectedAccountPtr))
 		}
 	}
 	return m, nil
@@ -537,12 +547,12 @@ func (m model) updateReposState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case key.Matches(msg, m.keys.Refresh):
 		m.loading = true
-		return m, tea.Batch(m.spinner.Tick, loadRepos(m.selectedAccount))
+		return m, tea.Batch(m.spinner.Tick, loadRepos(m.selectedAccountPtr))
 	case key.Matches(msg, m.keys.Clone):
 		if selectedItem := m.list.SelectedItem(); selectedItem != nil {
 			if repo, ok := selectedItem.(Repository); ok {
 				m.loading = true
-				return m, tea.Batch(m.spinner.Tick, cloneRepo(repo, m.selectedAccount.Token))
+				return m, tea.Batch(m.spinner.Tick, cloneRepo(repo, m.selectedAccountPtr.Token))
 			}
 		}
 	default:
@@ -583,15 +593,15 @@ func (m model) updateAddingAccountState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.messageType = "error"
 				}
 
-				// Обновляем вкладки
-				m.tabs = []string{}
+				// Обновляем список аккаунтов
+				m.accountsList = []string{}
 				for _, acc := range m.accounts {
-					m.tabs = append(m.tabs, acc.Name)
+					m.accountsList = append(m.accountsList, acc.Name)
 				}
-				m.tabs = append(m.tabs, "+ Add Account")
+				m.accountsList = append(m.accountsList, "+ Add Account")
 
 				// Переходим на новый аккаунт
-				m.selectedTab = len(m.accounts) - 1
+				m.selectedAccount = len(m.accounts) - 1
 				m.state = stateAccounts
 
 				// Сбрасываем поля ввода
@@ -632,33 +642,73 @@ func (m model) View() string {
 
 // Рендер экрана аккаунтов
 func (m model) renderAccountsScreen() string {
-	doc := strings.Builder{}
+    doc := strings.Builder{}
 
-	// Вкладки
-	doc.WriteString(m.renderTabs() + "\n\n")
+    // Заголовок - центрируем по всей ширине
+    title := titleStyle.Render("GitHub Account Manager")
+    centeredTitle := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, title)
+    doc.WriteString(centeredTitle + "\n\n")
 
-	// Сообщение
-	if m.message != "" {
-		var style lipgloss.Style
-		if m.messageType == "success" {
-			style = successStyle
-		} else {
-			style = errorStyle
-		}
-		doc.WriteString(style.Render(m.message) + "\n\n")
-	}
+    // Список аккаунтов
+    var accountItems []string
+    for i, accountName := range m.accountsList {
+        if i == m.selectedAccount {
+            if i == len(m.accountsList)-1 {
+                accountItems = append(accountItems, activeAddAccountStyle.Render(accountName))
+            } else {
+                accountItems = append(accountItems, activeAccountStyle.Render(accountName))
+            }
+        } else {
+            if i == len(m.accountsList)-1 {
+                accountItems = append(accountItems, addAccountStyle.Render(accountName))
+            } else {
+                accountItems = append(accountItems, accountItemStyle.Render(accountName))
+            }
+        }
+    }
 
-	doc.WriteString("Select an account to view repositories or add a new account\n")
-	doc.WriteString("Press Enter to select, →/← to navigate tabs, q to quit")
+    // Объединяем аккаунты вертикально
+    accountsView := lipgloss.JoinVertical(lipgloss.Center, accountItems...)
+    
+    // Центрируем весь блок по горизонтали и вертикали
+    centeredAccounts := lipgloss.Place(
+        m.width, 
+        m.height-10, // Оставляем место для заголовка и инструкций
+        lipgloss.Center, 
+        lipgloss.Center, 
+        accountsView,
+    )
+    doc.WriteString(centeredAccounts + "\n\n")
 
-	return appStyle.Render(doc.String())
+    // Сообщение
+    if m.message != "" {
+        var style lipgloss.Style
+        if m.messageType == "success" {
+            style = successStyle
+        } else {
+            style = errorStyle
+        }
+        centeredMessage := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, style.Render(m.message))
+        doc.WriteString(centeredMessage + "\n\n")
+    }
+
+    // Инструкции
+    instructions := lipgloss.NewStyle().
+        Foreground(lipgloss.Color("240")).
+        Italic(true).
+        Render("Use ↑/↓ to navigate, Enter to select, q to quit")
+    
+    centeredInstructions := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, instructions)
+    doc.WriteString(centeredInstructions)
+
+    return appStyle.Render(doc.String())
 }
 
 // Рендер экрана репозиториев
 func (m model) renderReposScreen() string {
 	doc := strings.Builder{}
 	
-	doc.WriteString(fmt.Sprintf("Account: %s\n", m.selectedAccount.Name))
+	doc.WriteString(fmt.Sprintf("Account: %s\n", m.selectedAccountPtr.Name))
 	
 	// Показываем путь develop directory
 	devPath, exists, err := checkDevelopDir()
@@ -694,46 +744,45 @@ func (m model) renderReposScreen() string {
 
 // Рендер экрана добавления аккаунта
 func (m model) renderAddAccountScreen() string {
-	doc := strings.Builder{}
+    doc := strings.Builder{}
 
-	doc.WriteString(formTitleStyle.Render("Add GitHub Account") + "\n\n")
+    // Содержимое формы
+    formContent := strings.Builder{}
+    formContent.WriteString(formTitleStyle.Render("Add GitHub Account") + "\n\n")
 
-	switch m.formState {
-	case nameInput:
-		doc.WriteString("Account Name:\n")
-		doc.WriteString(inputStyle.Render(m.nameInput.View()) + "\n\n")
-		doc.WriteString("Press Enter to continue, esc to cancel")
-	case tokenInput:
-		doc.WriteString("GitHub Personal Access Token:\n")
-		doc.WriteString(inputStyle.Render(m.tokenInput.View()) + "\n\n")
-		doc.WriteString("Press Enter to save, esc to cancel")
-	}
+    switch m.formState {
+    case nameInput:
+        formContent.WriteString("Account Name:\n")
+        formContent.WriteString(inputStyle.Render(m.nameInput.View()) + "\n\n")
+        formContent.WriteString("Press Enter to continue, esc to cancel")
+    case tokenInput:
+        formContent.WriteString("GitHub Personal Access Token:\n")
+        formContent.WriteString(inputStyle.Render(m.tokenInput.View()) + "\n\n")
+        formContent.WriteString("Press Enter to save, esc to cancel")
+    }
 
-	// Сообщение
-	if m.message != "" {
-		var style lipgloss.Style
-		if m.messageType == "success" {
-			style = successStyle
-		} else {
-			style = errorStyle
-		}
-		doc.WriteString("\n\n" + style.Render(m.message))
-	}
+    // Сообщение
+    if m.message != "" {
+        var style lipgloss.Style
+        if m.messageType == "success" {
+            style = successStyle
+        } else {
+            style = errorStyle
+        }
+        formContent.WriteString("\n\n" + style.Render(m.message))
+    }
 
-	return appStyle.Render(doc.String())
-}
+    // Центрируем всю форму по центру экрана
+    centeredForm := lipgloss.Place(
+        m.width, 
+        m.height, 
+        lipgloss.Center, 
+        lipgloss.Center, 
+        formContent.String(),
+    )
+    doc.WriteString(centeredForm)
 
-// Рендер вкладок
-func (m model) renderTabs() string {
-	var renderedTabs []string
-	for i, t := range m.tabs {
-		if i == m.selectedTab {
-			renderedTabs = append(renderedTabs, activeTabStyle.Render(t))
-		} else {
-			renderedTabs = append(renderedTabs, tabStyle.Render(t))
-		}
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
+    return appStyle.Render(doc.String())
 }
 
 func main() {
